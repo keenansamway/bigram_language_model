@@ -1,2 +1,2 @@
 # bigram_language_model
- A pytorch implementation of a simple bigram language model for generating text
+###### A pytorch implementation of a simple (not very effective) bigram language model for generating text
