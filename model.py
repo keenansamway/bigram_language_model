@@ -6,14 +6,17 @@ batch_size = 32
 block_size = 8
 max_iterations = 3000
 eval_interval = 300
-learning_rate = 1e-3
+learning_rate = 3e-4
 device = "mps" if torch.backends.mps.is_available() else "cpu"
 eval_iterations = 200
 n_embed = 32
+n_head = 6
+n_layer = 6
+dropout = 0.2
 
 torch.manual_seed(42)
 
-with open('datasets/harry_potter_books/cleaned_book.txt', 'r') as f:
+with open('datasets/harry_potter_books/cleaned_book.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
 chars = sorted(list(set(text)))
@@ -21,8 +24,8 @@ vocab_size = len(chars)
 
 stoi = {ch:i for i,ch in enumerate(chars)}
 itos = {i:ch for i,ch in enumerate(chars)}
-encode = lambda e : [stoi[ch] for ch in e]
-decode = lambda d : ''.join([itos[i] for i in d])
+encode = lambda s : [stoi[ch] for ch in s]
+decode = lambda l : ''.join([itos[i] for i in l])
 
 data = torch.tensor(encode(text), dtype=torch.long)
 
@@ -66,7 +69,7 @@ class Head(nn.Module):
         k = self.key(x)
         q = self.query(x)
         
-        wei = q @ k.transpose(-2,-1) / (C**-0.5)
+        wei = q @ k.transpose(-2,-1) * (C**-0.5)
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
         wei = F.softmax(wei, dim=-1)
         
@@ -78,17 +81,48 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, num_heads, head_size):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(n_embed, n_embed)
         
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.proj(out)
         return out
+
+class FeedForward(nn.Module):
+    def __init__(self, n_embed):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embed, n_embed * 4),
+            nn.ReLU(),
+            nn.Linear(n_embed * 4, n_embed)
+        )
+        
+    
+    def forward(self, x):
+        return self.net(x)
+
+class Block(nn.Module):
+    def __init__(self, n_embed, n_head):
+        super().__init__()
+        head_size = n_embed // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ff = FeedForward(n_embed)
+        
+    def forward(self, x):
+        x = x + self.sa(x)
+        x = x + self.ff(x)
+        return x 
 
 class BigramLM(nn.Module):
     def __init__(self):
         super().__init__()
         self.embedding_table = nn.Embedding(vocab_size, n_embed)
         self.positional_encoding = nn.Embedding(block_size, n_embed)
-        self.sa_heads = MultiHeadAttention(4, n_embed//4)
+        self.blocks = nn.Sequential(
+            Block(n_embed, n_head=4),
+            Block(n_embed, n_head=4),
+            Block(n_embed, n_head=4),
+        )
         self.lm_head = nn.Linear(n_embed, vocab_size)
         
     def forward(self, idx, targets=None):
@@ -97,8 +131,7 @@ class BigramLM(nn.Module):
         token_embed = self.embedding_table(idx) #(B,T,n_embed)
         pos_encod = self.positional_encoding(torch.arange(T, device=device)) #(T,n_embed)
         x = token_embed + pos_encod #(B,T,n_embed)
-        x = self.sa_heads(x)
-         
+        x = self.blocks(x)
         logits = self.lm_head(x) # (B,T,vocab_size)
         
         if targets is None:
