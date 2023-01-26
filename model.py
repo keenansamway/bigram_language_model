@@ -35,6 +35,7 @@ def get_batch(split):
     ix = torch.randint(len(data) - block_size, size=(batch_size,))
     x = torch.stack([data[i:i+block_size] for i in ix])
     y = torch.stack([data[i+1:i+block_size+1] for i in ix])
+    x, y = x.to(device), y.to(device)
     return x, y
 
 
@@ -53,7 +54,7 @@ def estimate_loss():
     return out
 
 class Head(nn.Module):
-    def __init__(self, n_embed, head_size):
+    def __init__(self, head_size):
         super().__init__()
         self.key = nn.Linear(n_embed, head_size, bias=False)
         self.query = nn.Linear(n_embed, head_size, bias=False)
@@ -66,11 +67,20 @@ class Head(nn.Module):
         q = self.query(x)
         
         wei = q @ k.transpose(-2,-1) / (C**-0.5)
-        wei = wei.masked_fill(self.trill[:T, :T] == 0, float('-inf'))
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
         wei = F.softmax(wei, dim=-1)
         
         v = self.value(x)
         out = wei @ v
+        return out
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        
+    def forward(self, x):
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
         return out
 
 class BigramLM(nn.Module):
@@ -78,6 +88,7 @@ class BigramLM(nn.Module):
         super().__init__()
         self.embedding_table = nn.Embedding(vocab_size, n_embed)
         self.positional_encoding = nn.Embedding(block_size, n_embed)
+        self.sa_heads = MultiHeadAttention(4, n_embed//4)
         self.lm_head = nn.Linear(n_embed, vocab_size)
         
     def forward(self, idx, targets=None):
@@ -86,6 +97,8 @@ class BigramLM(nn.Module):
         token_embed = self.embedding_table(idx) #(B,T,n_embed)
         pos_encod = self.positional_encoding(torch.arange(T, device=device)) #(T,n_embed)
         x = token_embed + pos_encod #(B,T,n_embed)
+        x = self.sa_heads(x)
+         
         logits = self.lm_head(x) # (B,T,vocab_size)
         
         if targets is None:
@@ -100,7 +113,8 @@ class BigramLM(nn.Module):
     
     def generate(self, idx, max_length):
         for _ in range(max_length):
-            logits, _ = self(idx)
+            idx_cond = idx[:, -block_size:]
+            logits, _ = self(idx_cond)
             logits = logits[:, -1, :]
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
@@ -108,7 +122,7 @@ class BigramLM(nn.Module):
         return idx
     
     
-model = BigramLM(vocab_size).to(device)
+model = BigramLM().to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
