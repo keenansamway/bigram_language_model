@@ -2,14 +2,15 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-batch_size = 32
-block_size = 8
+batch_size = 64
+block_size = 256
 max_iterations = 3000
 eval_interval = 300
 learning_rate = 3e-4
 device = "mps" if torch.backends.mps.is_available() else "cpu"
+#device = "cpu"
 eval_iterations = 200
-n_embed = 32
+n_embed = 384
 n_head = 6
 n_layer = 6
 dropout = 0.2
